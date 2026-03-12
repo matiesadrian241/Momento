@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Image from "next/image";
 import Link from "next/link";
 import { signOut } from "next-auth/react";
 import { Camera, LogOut, Menu, X, LayoutDashboard, Plus } from "lucide-react";
@@ -10,6 +11,7 @@ interface DashboardNavProps {
   user: {
     name?: string | null;
     email?: string | null;
+    image?: string | null;
   };
 }
 
@@ -36,9 +38,12 @@ export function DashboardNav({ user }: DashboardNavProps) {
         </div>
 
         <div className="hidden items-center gap-4 md:flex">
-          <span className="text-sm text-gray-500">
-            {user.name || user.email}
-          </span>
+          <div className="flex items-center gap-2">
+            <UserAvatar user={user} />
+            <span className="text-sm text-gray-500">
+              {user.name || user.email}
+            </span>
+          </div>
           <Link href="/dashboard/events/new">
             <Button size="sm">
               <Plus className="mr-1.5 h-4 w-4" />
@@ -87,9 +92,12 @@ export function DashboardNav({ user }: DashboardNavProps) {
             </Link>
           </div>
           <div className="mt-4 border-t border-gray-200 pt-4">
-            <p className="px-3 text-sm text-gray-500">
-              {user.name || user.email}
-            </p>
+            <div className="flex items-center gap-2 px-3">
+              <UserAvatar user={user} />
+              <p className="text-sm text-gray-500">
+                {user.name || user.email}
+              </p>
+            </div>
             <button
               onClick={() => signOut({ callbackUrl: "/" })}
               className="mt-2 flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm text-gray-500 hover:bg-gray-100 hover:text-gray-700"
@@ -101,5 +109,30 @@ export function DashboardNav({ user }: DashboardNavProps) {
         </div>
       )}
     </header>
+  );
+}
+
+function UserAvatar({
+  user,
+}: {
+  user: { name?: string | null; image?: string | null };
+}) {
+  if (user.image) {
+    return (
+      <Image
+        src={user.image}
+        alt={user.name || "User"}
+        width={28}
+        height={28}
+        className="rounded-full"
+      />
+    );
+  }
+
+  const initial = (user.name?.[0] || "U").toUpperCase();
+  return (
+    <div className="flex h-7 w-7 items-center justify-center rounded-full bg-gray-200 text-xs font-medium text-gray-600">
+      {initial}
+    </div>
   );
 }

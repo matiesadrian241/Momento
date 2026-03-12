@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { OAuthButtons, OAuthDivider } from "@/components/auth/oauth-buttons";
 import { loginSchema, type LoginInput } from "@/lib/validations";
 
 export function LoginForm() {
@@ -73,6 +74,10 @@ export function LoginForm() {
           {error}
         </div>
       )}
+
+      <OAuthButtons label="signin" />
+
+      <OAuthDivider />
 
       <form onSubmit={onSubmit} className="space-y-4">
         <Input

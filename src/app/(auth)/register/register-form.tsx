@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { OAuthButtons, OAuthDivider } from "@/components/auth/oauth-buttons";
 import { registerSchema, type RegisterInput } from "@/lib/validations";
 
 export function RegisterForm() {
@@ -98,6 +99,10 @@ export function RegisterForm() {
           {error}
         </div>
       )}
+
+      <OAuthButtons label="signup" />
+
+      <OAuthDivider />
 
       <form onSubmit={onSubmit} className="space-y-4">
         <Input
