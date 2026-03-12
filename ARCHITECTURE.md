@@ -51,10 +51,11 @@ R2 wins by a landslide because:
 ### How Uploads Work with R2
 
 ```
-Guest's Phone                  Your Node.js API              Cloudflare R2
+Guest's Phone               Next.js API Route Handler        Cloudflare R2
      |                              |                             |
-     |  1. POST /api/upload/request |                             |
-     |  (eventId, fileName, type)   |                             |
+     |  1. POST /api/e/[slug]/      |                             |
+     |     upload-url               |                             |
+     |  (fileName, contentType)     |                             |
      |----------------------------->|                              |
      |                              |  2. Generate presigned URL   |
      |                              |  (PutObject, 15min expiry)   |
@@ -65,16 +66,19 @@ Guest's Phone                  Your Node.js API              Cloudflare R2
      |  4. PUT file directly to R2 (browser → R2, not via server)  |
      |------------------------------------------------------------>|
      |                                                             |
-     |  5. POST /api/upload/confirm |                              |
-     |  (eventId, fileKey)          |                              |
+     |  5. POST /api/e/[slug]/      |                              |
+     |     confirm                  |                              |
+     |  (fileKey, guestName)        |                              |
      |----------------------------->|                              |
      |                              |  6. Save metadata to DB      |
+     |                              |  7. Generate thumbnail        |
 ```
 
-This **presigned URL pattern** is critical — the photo never touches your Node.js server, so:
+This **presigned URL pattern** is critical — the photo never touches your Next.js server, so:
 - Your server stays lightweight (no large file buffering)
 - Uploads are fast (direct to R2's edge)
-- You can handle hundreds of concurrent uploads without scaling your server
+- You can handle hundreds of concurrent uploads without scaling
+- Vercel's serverless functions stay well within timeout limits
 
 ### R2 Bucket Structure
 
@@ -97,33 +101,47 @@ your-bucket/
 
 ## Full Recommended Tech Stack
 
-### Frontend (React)
+### Monorepo: Next.js (Frontend + Backend in one project)
+
+With Next.js, you don't need a separate Express/Fastify server. Next.js **API Route Handlers** (`app/api/...`) run server-side Node.js code, and **Server Components** fetch data directly on the server — no separate backend deployment needed.
+
+#### Why Next.js is a great fit for this project
+
+- **Server Components** — gallery pages and the organizer dashboard fetch data on the server, so there's no loading spinner and SEO is free
+- **API Route Handlers** — all your backend logic (presigned URLs, auth, ZIP downloads) lives in `app/api/` alongside your frontend
+- **`next/image`** — automatic image optimization and lazy loading for thumbnails (can proxy from R2)
+- **App Router** — file-based routing maps perfectly to your URL structure (`/e/[slug]` for guest uploads, `/dashboard/events/[id]` for organizers)
+- **Server Actions** — form submissions (create event, update settings) without writing API endpoints
+- **Middleware** — auth checks at the edge before hitting your pages
+- **Single deployment** — one `next build` deploys both frontend and backend to Vercel
+
+### Frontend Layer
 
 | Layer | Technology | Why |
 |---|---|---|
-| Framework | **Vite + React** | Fast dev experience, lightweight |
+| Framework | **Next.js 15 (App Router)** | SSR/SSG + API routes + React Server Components |
 | Styling | **Tailwind CSS** | Rapid UI development, mobile-first |
-| State | **TanStack Query** | Server state management, caching |
-| Routing | **React Router v7** | Standard, well-supported |
+| State | **TanStack Query** | Client-side server state (gallery pagination, uploads) |
 | QR Generation | **qrcode.react** | Generate QR codes client-side |
 | Image Gallery | **react-photo-album** | Masonry/grid layouts for galleries |
 | Upload UI | **react-dropzone** | Drag & drop + mobile file picker |
+| Forms | **React Hook Form + zod** | Validated forms for event creation/settings |
 
-### Backend (Node.js)
+### Backend Layer (all inside Next.js)
 
 | Layer | Technology | Why |
 |---|---|---|
-| Runtime | **Node.js 20+** | LTS, stable |
-| Framework | **Express** or **Fastify** | Fastify is faster, Express has more ecosystem |
+| API Routes | **Next.js Route Handlers** | `app/api/` — replaces Express/Fastify entirely |
+| Server Logic | **Server Components + Server Actions** | Data fetching and mutations without separate API calls |
 | Database | **PostgreSQL** | Relational data (events, users, photos metadata) |
-| ORM | **Drizzle ORM** | Type-safe, lightweight, great DX |
-| Auth | **JWT + bcrypt** | For organizers; guests don't need auth |
+| ORM | **Drizzle ORM** | Type-safe, lightweight, great DX with Next.js |
+| Auth | **NextAuth.js (Auth.js v5)** | Built for Next.js, supports credentials + OAuth |
 | Storage SDK | **@aws-sdk/client-s3** | Works with R2 (S3-compatible) |
-| QR Generation | **qrcode** npm package | Server-side QR as PNG/SVG |
+| QR Generation | **qrcode** npm package | Server-side QR as PNG/SVG in API routes |
 | ZIP Creation | **archiver** | Stream ZIP files for bulk download |
-| Image Processing | **sharp** | Generate thumbnails on upload confirm |
-| Real-time | **Socket.io** or **SSE** | Live slideshow feature |
-| Validation | **zod** | Schema validation for API inputs |
+| Image Processing | **sharp** | Generate thumbnails on upload confirm (Next.js bundles sharp already) |
+| Real-time | **Server-Sent Events (SSE)** | Live slideshow via API route streaming |
+| Validation | **zod** | Schema validation shared between client and server |
 
 ### Infrastructure
 
@@ -131,9 +149,74 @@ your-bucket/
 |---|---|---|
 | Object Storage | **Cloudflare R2** | $0 egress, S3-compatible |
 | Database | **Neon** (serverless Postgres) | Free tier, scales well, no server mgmt |
-| Hosting (API) | **Railway** or **Fly.io** | Easy Node.js deployment |
-| Hosting (Frontend) | **Cloudflare Pages** or **Vercel** | Free tier, global CDN |
-| Domain/DNS | **Cloudflare** | Free, pairs with R2 |
+| Hosting | **Vercel** | Native Next.js hosting, free tier, global edge |
+| Domain/DNS | **Cloudflare** or **Vercel** | Free, pairs with R2 |
+
+### Project Structure
+
+```
+app/
+├── (marketing)/              ← Public pages (SSG for SEO)
+│   ├── page.tsx                  Landing page
+│   ├── pricing/page.tsx          Pricing page
+│   └── layout.tsx                Marketing layout (navbar, footer)
+│
+├── (auth)/                   ← Auth pages
+│   ├── login/page.tsx
+│   └── register/page.tsx
+│
+├── dashboard/                ← Organizer dashboard (authenticated)
+│   ├── layout.tsx                Dashboard shell (sidebar, auth check)
+│   ├── page.tsx                  Event list
+│   └── events/
+│       ├── new/page.tsx          Create event form
+│       └── [id]/
+│           ├── page.tsx          Event gallery + stats
+│           ├── settings/page.tsx Event settings
+│           └── slideshow/page.tsx Live slideshow (fullscreen)
+│
+├── e/[slug]/                 ← Guest upload page (NO auth required)
+│   └── page.tsx                  Mobile-friendly upload UI
+│
+├── api/                      ← API Route Handlers
+│   ├── auth/[...nextauth]/route.ts
+│   ├── events/
+│   │   ├── route.ts              GET (list) / POST (create)
+│   │   └── [id]/
+│   │       ├── route.ts          GET / PATCH / DELETE
+│   │       ├── qr/route.ts       GET QR code image
+│   │       ├── download/route.ts GET streamed ZIP
+│   │       └── media/
+│   │           ├── route.ts      GET (list with pagination)
+│   │           └── [mid]/route.ts GET / DELETE single media
+│   └── e/[slug]/
+│       ├── route.ts              GET event info for guests
+│       ├── upload-url/route.ts   POST → presigned R2 URL
+│       └── confirm/route.ts      POST → save metadata + gen thumbnail
+│
+├── layout.tsx                ← Root layout
+└── globals.css               ← Tailwind base styles
+
+lib/
+├── db/
+│   ├── schema.ts                 Drizzle schema (users, events, media)
+│   ├── index.ts                  DB connection (Neon)
+│   └── migrations/               Drizzle migration files
+├── r2.ts                         R2 client + helper functions
+├── auth.ts                       NextAuth config
+└── utils.ts                      Shared utilities
+
+components/
+├── ui/                           Reusable UI components
+├── upload/
+│   ├── dropzone.tsx              Upload dropzone for guests
+│   └── progress.tsx              Upload progress indicator
+├── gallery/
+│   ├── photo-grid.tsx            Masonry photo grid
+│   └── lightbox.tsx              Full-screen photo viewer
+├── qr-code.tsx                   QR code display component
+└── slideshow.tsx                 Live slideshow component
+```
 
 ---
 
@@ -185,32 +268,37 @@ CREATE INDEX idx_events_user ON events(user_id);
 
 ---
 
-## API Endpoints (Core)
+## API Route Handlers (Next.js `app/api/`)
+
+All backend logic lives inside Next.js Route Handlers. No separate server needed.
 
 ```
-Auth:
-  POST   /api/auth/register          — organizer signup
-  POST   /api/auth/login             — organizer login
+Auth (handled by NextAuth.js):
+  POST   /api/auth/[...nextauth]     — login, register, session (built-in)
 
-Events (authenticated):
-  POST   /api/events                 — create event
+Events (authenticated via middleware):
+  POST   /api/events                 — create event (or use Server Action)
   GET    /api/events                 — list my events
-  GET    /api/events/:id             — event details + stats
-  PATCH  /api/events/:id             — update settings
-  DELETE /api/events/:id             — delete event + all media
-  GET    /api/events/:id/qr          — get QR code image
-  GET    /api/events/:id/download    — stream ZIP of all originals
+  GET    /api/events/[id]            — event details + stats
+  PATCH  /api/events/[id]            — update settings
+  DELETE /api/events/[id]            — delete event + all media
+  GET    /api/events/[id]/qr         — get QR code image
+  GET    /api/events/[id]/download   — stream ZIP of all originals
 
-Guest Upload (no auth):
-  GET    /api/e/:slug                — get event info (name, theme)
-  POST   /api/e/:slug/upload-url    — get presigned upload URL
-  POST   /api/e/:slug/confirm       — confirm upload, trigger thumbnail gen
+Guest Upload (no auth required):
+  GET    /api/e/[slug]               — get event info (name, theme)
+  POST   /api/e/[slug]/upload-url   — get presigned upload URL
+  POST   /api/e/[slug]/confirm      — confirm upload, trigger thumbnail gen
 
 Gallery:
-  GET    /api/events/:id/media       — list media with pagination
-  GET    /api/events/:id/media/:mid  — get single media details + URLs
-  DELETE /api/events/:id/media/:mid  — delete single media
+  GET    /api/events/[id]/media      — list media with pagination
+  DELETE /api/events/[id]/media/[mid] — delete single media
 ```
+
+Note: Many read operations won't need API routes at all — Server Components
+can query the database directly in the page component. API routes are mainly
+needed for: presigned URL generation, file streaming (ZIP download), and
+client-side mutations that can't use Server Actions.
 
 ---
 
@@ -233,44 +321,74 @@ Eventoly charges a **one-time fee per event** ($49), not a subscription. This is
 
 ## Key Implementation Notes
 
-### Presigned URL Upload (Node.js + R2)
+### R2 Client Setup (`lib/r2.ts`)
 
-```javascript
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+```typescript
+import { S3Client, PutObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
-const r2 = new S3Client({
+export const r2 = new S3Client({
   region: "auto",
   endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
   credentials: {
-    accessKeyId: process.env.R2_ACCESS_KEY_ID,
-    secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
+    accessKeyId: process.env.R2_ACCESS_KEY_ID!,
+    secretAccessKey: process.env.R2_SECRET_ACCESS_KEY!,
   },
 });
 
-async function getUploadUrl(eventId, fileName, contentType) {
+export async function getUploadUrl(eventId: string, fileName: string, contentType: string) {
   const key = `events/${eventId}/originals/${crypto.randomUUID()}_${fileName}`;
   const command = new PutObjectCommand({
     Bucket: process.env.R2_BUCKET,
     Key: key,
     ContentType: contentType,
   });
-  const url = await getSignedUrl(r2, command, { expiresIn: 900 }); // 15 min
+  const url = await getSignedUrl(r2, command, { expiresIn: 900 });
   return { url, key };
+}
+```
+
+### Presigned URL Route Handler (`app/api/e/[slug]/upload-url/route.ts`)
+
+```typescript
+import { NextRequest, NextResponse } from "next/server";
+import { getUploadUrl } from "@/lib/r2";
+import { db } from "@/lib/db";
+import { events } from "@/lib/db/schema";
+import { eq } from "drizzle-orm";
+
+export async function POST(
+  request: NextRequest,
+  { params }: { params: Promise<{ slug: string }> }
+) {
+  const { slug } = await params;
+  const { fileName, contentType } = await request.json();
+
+  const event = await db.query.events.findFirst({
+    where: eq(events.slug, slug),
+  });
+  if (!event || !event.isActive) {
+    return NextResponse.json({ error: "Event not found" }, { status: 404 });
+  }
+
+  const { url, key } = await getUploadUrl(event.id, fileName, contentType);
+  return NextResponse.json({ url, key });
 }
 ```
 
 ### Thumbnail Generation (on upload confirm)
 
-```javascript
+```typescript
 import sharp from "sharp";
+import { r2 } from "@/lib/r2";
+import { GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 
-async function generateThumbnail(originalKey) {
+export async function generateThumbnail(originalKey: string): Promise<string> {
   const original = await r2.send(new GetObjectCommand({
     Bucket: process.env.R2_BUCKET,
     Key: originalKey,
   }));
-  const buffer = Buffer.from(await original.Body.transformToByteArray());
+  const buffer = Buffer.from(await original.Body!.transformToByteArray());
   const thumbnail = await sharp(buffer)
     .resize(400, 400, { fit: "inside" })
     .webp({ quality: 80 })
@@ -288,26 +406,135 @@ async function generateThumbnail(originalKey) {
 }
 ```
 
-### ZIP Download (streaming, memory-efficient)
+### ZIP Download Route Handler (`app/api/events/[id]/download/route.ts`)
 
-```javascript
+```typescript
+import { NextRequest } from "next/server";
 import archiver from "archiver";
+import { Readable } from "stream";
+import { r2 } from "@/lib/r2";
+import { GetObjectCommand } from "@aws-sdk/client-s3";
+import { db } from "@/lib/db";
+import { media } from "@/lib/db/schema";
+import { eq } from "drizzle-orm";
 
-app.get("/api/events/:id/download", async (req, res) => {
-  const media = await db.select().from(mediaTable).where(eq(mediaTable.eventId, req.params.id));
-  res.setHeader("Content-Type", "application/zip");
-  res.setHeader("Content-Disposition", `attachment; filename="event-photos.zip"`);
-  const archive = archiver("zip", { zlib: { level: 1 } }); // fast compression
-  archive.pipe(res);
-  for (const item of media) {
-    const obj = await r2.send(new GetObjectCommand({
-      Bucket: process.env.R2_BUCKET,
-      Key: item.originalKey,
-    }));
-    archive.append(obj.Body, { name: item.fileName });
-  }
-  await archive.finalize();
-});
+export async function GET(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id } = await params;
+  const files = await db.select().from(media).where(eq(media.eventId, id));
+
+  const archive = archiver("zip", { zlib: { level: 1 } });
+  const stream = new ReadableStream({
+    start(controller) {
+      archive.on("data", (chunk) => controller.enqueue(chunk));
+      archive.on("end", () => controller.close());
+      archive.on("error", (err) => controller.error(err));
+    },
+  });
+
+  (async () => {
+    for (const item of files) {
+      const obj = await r2.send(new GetObjectCommand({
+        Bucket: process.env.R2_BUCKET,
+        Key: item.originalKey,
+      }));
+      const nodeStream = obj.Body as Readable;
+      archive.append(nodeStream, { name: item.fileName });
+    }
+    await archive.finalize();
+  })();
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "application/zip",
+      "Content-Disposition": `attachment; filename="event-photos.zip"`,
+    },
+  });
+}
+```
+
+### Guest Upload Page — Server Component (`app/e/[slug]/page.tsx`)
+
+```typescript
+import { db } from "@/lib/db";
+import { events } from "@/lib/db/schema";
+import { eq } from "drizzle-orm";
+import { notFound } from "next/navigation";
+import { UploadDropzone } from "@/components/upload/dropzone";
+
+export default async function GuestUploadPage({
+  params,
+}: {
+  params: Promise<{ slug: string }>;
+}) {
+  const { slug } = await params;
+  const event = await db.query.events.findFirst({
+    where: eq(events.slug, slug),
+  });
+
+  if (!event || !event.isActive) notFound();
+
+  return (
+    <main className="min-h-screen bg-gradient-to-b from-rose-50 to-white px-4 py-8">
+      <div className="mx-auto max-w-lg text-center">
+        <h1 className="text-3xl font-bold text-gray-900">{event.name}</h1>
+        {event.description && (
+          <p className="mt-2 text-gray-600">{event.description}</p>
+        )}
+        <UploadDropzone slug={slug} className="mt-8" />
+      </div>
+    </main>
+  );
+}
+```
+
+### Using `next/image` with R2 (`next.config.ts`)
+
+```typescript
+import type { NextConfig } from "next";
+
+const nextConfig: NextConfig = {
+  images: {
+    remotePatterns: [
+      {
+        protocol: "https",
+        hostname: `${process.env.R2_PUBLIC_DOMAIN}`,
+      },
+    ],
+  },
+};
+
+export default nextConfig;
+```
+
+This lets you use `<Image src={thumbnailUrl} ... />` and Next.js will
+automatically optimize, resize, and cache the images from R2.
+
+---
+
+## Environment Variables (`.env.local`)
+
+```env
+# Cloudflare R2
+R2_ACCOUNT_ID=your_account_id
+R2_ACCESS_KEY_ID=your_access_key
+R2_SECRET_ACCESS_KEY=your_secret_key
+R2_BUCKET=your-bucket-name
+R2_PUBLIC_DOMAIN=pub-xxx.r2.dev        # or your custom domain
+
+# Database (Neon)
+DATABASE_URL=postgresql://user:pass@ep-xxx.us-east-2.aws.neon.tech/dbname?sslmode=require
+
+# NextAuth
+NEXTAUTH_SECRET=generate-a-random-secret
+NEXTAUTH_URL=http://localhost:3000
+
+# Stripe (for payments)
+STRIPE_SECRET_KEY=sk_test_xxx
+STRIPE_WEBHOOK_SECRET=whsec_xxx
+NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=pk_test_xxx
 ```
 
 ---
@@ -316,9 +543,9 @@ app.get("/api/events/:id/download", async (req, res) => {
 
 1. **Set up Cloudflare R2** — Create account → create bucket → generate API tokens
 2. **Set up Neon Postgres** — Create database → run the schema above
-3. **Scaffold the backend** — `npm init` + Express/Fastify + Drizzle
-4. **Scaffold the frontend** — `npm create vite@latest` with React + TypeScript
-5. **Build the guest upload flow first** — This is your core product loop
+3. **Scaffold the project** — `npx create-next-app@latest` with TypeScript + Tailwind + App Router
+4. **Install deps** — `npm i drizzle-orm @neondatabase/serverless @aws-sdk/client-s3 @aws-sdk/s3-request-presigner next-auth@beta zod qrcode.react react-dropzone archiver`
+5. **Build the guest upload flow first** — This is your core product loop (`/e/[slug]` page)
 6. **Add organizer dashboard** — Event creation, gallery view, download
 7. **Add QR code generation** — Simple wrapper around the event URL
 8. **Add payment** — Stripe Checkout for one-time event purchases
